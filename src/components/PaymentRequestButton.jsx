@@ -45,7 +45,7 @@ const PaymentRequestButton = ({ clientSecret }) => {
     paymentRequest.on("paymentmethod", async (ev) => {
       const { paymentMethod } = ev;
 
-      const response = await fetch("https://donation-hopefortails-81380561.vercel.app/api/payments/confirm-payment", {
+      const response = await fetch("/api/payments/confirm-payment", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
