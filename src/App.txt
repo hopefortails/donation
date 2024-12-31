@@ -1,0 +1,488 @@
+import { useState, useEffect } from 'react';
+import { createDonation, fetchDonations } from './services/donationService';
+import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
+import { loadStripe } from '@stripe/stripe-js';
+import './output.css';
+import './index.css';
+import PropTypes from 'prop-types';
+import PayPalButton from './components/PayPalButton';
+
+const stripePromise = loadStripe('pk_test_51Qar2uEQ1gWRTLwxM8bWGJpRoh5R3J4dmNVpGXMiJdAKe8kbjXEmz5a4ZMa8dAnZVAjIbNmexFPr2S75ZphsH9D700LYxu5MyP');
+
+const LoadingSpinner = () => (
+  <div className="flex justify-center items-center">
+    <div className="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-8 w-8"></div>
+  </div>
+);
+
+const PaymentForm = ({ selectedAmount, onPaymentSuccess }) => {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [status, setStatus] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handlePayment = async (e) => {
+    e.preventDefault();
+    setStatus('');
+    setLoading(true);
+
+    if (!stripe || !elements) {
+      setStatus('Stripe is not initialized. Please try again later.');
+      setLoading(false);
+      return;
+    }
+
+    const card = elements.getElement(CardElement);
+    const { error, paymentIntent } = await stripe.confirmCardPayment(window.clientSecret, {
+      payment_method: {
+        card,
+      },
+    });
+
+    setLoading(false);
+    if (error) {
+      console.error('Payment failed:', error.message);
+      setStatus('Payment failed: ' + error.message);
+    } else if (paymentIntent.status === 'succeeded') {
+      setStatus('Payment successful! Thank you for your donation.');
+      onPaymentSuccess();
+    }
+  };
+
+  return (
+    <form onSubmit={handlePayment} className="bg-white p-4 rounded shadow-md">
+      <CardElement className="border p-2 rounded mb-4" />
+      <button
+        type="submit"
+        className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 mt-4"
+        disabled={!stripe || loading}
+      >
+        {loading ? 'Processing...' : `Pay $${selectedAmount}`}
+      </button>
+      <p className="mt-4 text-green-500">{status}</p>
+    </form>
+  );
+};
+
+PaymentForm.propTypes = {
+  selectedAmount: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+  onPaymentSuccess: PropTypes.func.isRequired,
+};
+
+const App = () => {
+  const [donations, setDonations] = useState([]);
+  const [formData, setFormData] = useState({ name: '', email: '', amount: '' });
+  const [selectedAmount, setSelectedAmount] = useState(null);
+  const [selectedGateway, setSelectedGateway] = useState('stripe');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+
+  useEffect(() => {
+    const loadDonations = async () => {
+      setLoading(true);
+      try {
+        const data = await fetchDonations();
+        setDonations(data);
+      } catch (error) {
+        console.error('Error fetching donations:', error.message);
+      }
+      setLoading(false);
+    };
+    loadDonations();
+  }, []);
+
+  const handleGatewayChange = (e) => {
+    setSelectedGateway(e.target.value);
+    setShowPaymentForm(false);
+  };
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData((prevData) => ({
+      ...prevData,
+      [name]: value,
+    }));
+    setError('');
+  };
+
+  const handleAmountSelect = (amount) => {
+    setSelectedAmount(amount);
+    setFormData((prevData) => ({ ...prevData, amount: '' }));
+  };
+
+  const validateForm = () => {
+    if (!formData.name.trim()) return 'Name is required.';
+    if (!formData.email.trim() || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(formData.email)) return 'A valid email is required.';
+    if (!selectedAmount && !formData.amount) return 'Please select or enter a donation amount.';
+    if (formData.amount && parseFloat(formData.amount) <= 0) return 'Custom amount must be a positive number.';
+    return null;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const validationError = validateForm();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const amount = selectedAmount || formData.amount;
+      const response = await fetch('http://localhost:5000/api/payments/create-payment-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'An unknown error occurred.');
+      }
+
+      const data = await response.json();
+      window.clientSecret = data.clientSecret;
+      setShowPaymentForm(true);
+      setError('');
+    } catch (error) {
+      console.error('Error creating payment intent:', error.message);
+      setError('Failed to initiate payment. Please try again.');
+    }
+    setLoading(false);
+  };
+
+  const handlePaymentSuccess = async () => {
+    const donationData = { ...formData, amount: selectedAmount || formData.amount };
+    try {
+      const newDonation = await createDonation(donationData);
+      setDonations((prevDonations) => [...prevDonations, newDonation]);
+      setFormData({ name: '', email: '', amount: '' });
+      setSelectedAmount(null);
+      setShowPaymentForm(false);
+    } catch (error) {
+      console.error('Error saving donation:', error.message);
+    }
+  };
+
+  const renderPaymentForm = () => {
+    switch (selectedGateway) {
+      case 'stripe':
+        return (
+          <Elements stripe={stripePromise}>
+            <PaymentForm selectedAmount={selectedAmount || formData.amount} onPaymentSuccess={handlePaymentSuccess} />
+          </Elements>
+        );
+      case 'paypal':
+        return (
+          <PayPalButton
+            amount={selectedAmount || formData.amount}
+            onPaymentSuccess={handlePaymentSuccess}
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="bg-gray-50 min-h-screen">
+      <header className="bg-blue-600 text-white py-4">
+        <div className="container mx-auto text-center">
+          <h1 className="text-3xl font-bold">Support Wikimedia</h1>
+          <p className="text-lg">Your donations keep knowledge free for everyone.</p>
+        </div>
+      </header>
+
+      <main className="container mx-auto p-4">
+        <h2 className="text-2xl font-bold mb-4">Make a Donation</h2>
+        {loading ? (
+          <LoadingSpinner />
+        ) : !showPaymentForm ? (
+          <form onSubmit={handleSubmit} className="bg-white p-6 rounded shadow-md">
+            <div className="mb-4">
+              <label className="block text-sm font-bold mb-2">Name:</label>
+              <input
+                type="text"
+                name="name"
+                value={formData.name}
+                onChange={handleChange}
+                className="w-full border p-2 rounded"
+                required
+              />
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-bold mb-2">Email:</label>
+              <input
+                type="email"
+                name="email"
+                value={formData.email}
+                onChange={handleChange}
+                className="w-full border p-2 rounded"
+                required
+              />
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-bold mb-2">Select Amount:</label>
+              <div className="grid grid-cols-4 gap-2">
+                {[5, 20, 50, 100].map((amount) => (
+                  <button
+                    key={amount}
+                    type="button"
+                    onClick={() => handleAmountSelect(amount)}
+                    className={`px-4 py-2 border rounded text-center ${
+                      selectedAmount === amount ? 'bg-blue-500 text-white' : 'bg-gray-100'
+                    }`}
+                  >
+                    ${amount}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-bold mb-2">Custom Amount (if any):</label>
+              <input
+                type="number"
+                name="amount"
+                value={formData.amount}
+                onChange={handleChange}
+                className="w-full border p-2 rounded"
+              />
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-bold mb-2">Payment Method:</label>
+              <select
+                value={selectedGateway}
+                onChange={handleGatewayChange}
+                className="w-full border p-2 rounded"
+              >
+                <option value="stripe">Card Payment</option>
+                <option value="paypal">PayPal</option>
+              </select>
+            </div>
+            {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+            <button
+              type="submit"
+              className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
+              disabled={loading}
+            >
+              {loading ? 'Processing...' : 'Continue to Payment'}
+            </button>
+          </form>
+        ) : (
+          renderPaymentForm()
+        )}
+        <section>
+          <h3 className="text-xl font-bold mt-8">Recent Donations</h3>
+          {donations.length > 0 ? (
+            <ul className="mt-4">
+              {donations.map((donation) => (
+                <li key={donation._id} className="border p-2 rounded mb-2">
+                  {donation.name} donated ${donation.amount}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-gray-500">No donations yet. Be the first to donate!</p>
+          )}
+        </section>
+      </main>
+
+      <footer className="bg-blue-600 text-white py-4 mt-8">
+        <div className="container mx-auto text-center">
+          <p>Every donation makes a difference. Thank you for your support!</p>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
+export default App;
+
+
+
+
+
+
+
+
+import { useState, useEffect } from 'react';
+import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
+import { loadStripe } from '@stripe/stripe-js';
+import PayPalButton from './components/PayPalButton';
+import './output.css';
+import './index.css';
+
+const stripePromise = loadStripe('pk_test_51Qar2uEQ1gWRTLwxM8bWGJpRoh5R3J4dmNVpGXMiJdAKe8kbjXEmz5a4ZMa8dAnZVAjIbNmexFPr2S75ZphsH9D700LYxu5MyP');
+
+const PaymentForm = ({ selectedAmount, onPaymentSuccess }) => {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [status, setStatus] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handlePayment = async (e) => {
+    e.preventDefault();
+    setStatus('');
+    setLoading(true);
+
+    if (!stripe || !elements) {
+      setStatus('Stripe is not initialized. Please try again later.');
+      setLoading(false);
+      return;
+    }
+
+    const card = elements.getElement(CardElement);
+    const { error, paymentIntent } = await stripe.confirmCardPayment(window.clientSecret, {
+      payment_method: {
+        card,
+      },
+    });
+
+    setLoading(false);
+    if (error) {
+      setStatus('Payment failed: ' + error.message);
+    } else if (paymentIntent.status === 'succeeded') {
+      setStatus('Payment successful! Thank you for your donation.');
+      onPaymentSuccess();
+    }
+  };
+
+  return (
+    <form onSubmit={handlePayment} className="bg-white p-4 rounded shadow-md">
+      <CardElement className="border p-2 rounded mb-4" />
+      <button
+        type="submit"
+        className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 mt-4"
+        disabled={!stripe || loading}
+      >
+        {loading ? 'Processing...' : `Donate $${selectedAmount}`}
+      </button>
+      <p className="mt-4 text-green-500">{status}</p>
+    </form>
+  );
+};
+
+const App = () => {
+  const [formData, setFormData] = useState({ name: '', email: '' });
+  const [selectedAmount, setSelectedAmount] = useState(null);
+  const [selectedGateway, setSelectedGateway] = useState('stripe');
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleAmountSelect = (amount) => {
+    setSelectedAmount(amount);
+  };
+
+  const handleGatewayChange = (e) => {
+    setSelectedGateway(e.target.value);
+    setShowPaymentForm(false); // Reset payment form
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedAmount) {
+      setError('Please select a donation amount.');
+      return;
+    }
+    setShowPaymentForm(true);
+  };
+
+  const renderPaymentForm = () => {
+    switch (selectedGateway) {
+      case 'stripe':
+        return (
+          <Elements stripe={stripePromise}>
+            <PaymentForm selectedAmount={selectedAmount} onPaymentSuccess={() => alert('Thank you for your donation!')} />
+          </Elements>
+        );
+      case 'paypal':
+        return <PayPalButton amount={selectedAmount} onPaymentSuccess={() => alert('Thank you for your donation!')} />;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="bg-gray-50 min-h-screen">
+      <header className="bg-blue-600 text-white py-4">
+        <div className="container mx-auto text-center">
+          <h1 className="text-3xl font-bold">Hope for Tails</h1>
+          <p className="text-lg">Help Us Give Stray Pets a Second Chance</p>
+        </div>
+      </header>
+
+      <main className="container mx-auto p-4">
+        <h2 className="text-2xl font-bold mb-4">Support Our Mission</h2>
+        <form onSubmit={handleSubmit} className="bg-white p-6 rounded shadow-md">
+          <div className="mb-4">
+            <label className="block text-sm font-bold mb-2">Your Name:</label>
+            <input
+              type="text"
+              name="name"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              className="w-full border p-2 rounded"
+              required
+            />
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-bold mb-2">Your Email:</label>
+            <input
+              type="email"
+              name="email"
+              value={formData.email}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              className="w-full border p-2 rounded"
+              required
+            />
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-bold mb-2">Donation Amount:</label>
+            <div className="grid grid-cols-3 gap-2">
+              {[2.75, 5, 10, 20, 50].map((amount) => (
+                <button
+                  key={amount}
+                  type="button"
+                  onClick={() => handleAmountSelect(amount)}
+                  className={`px-4 py-2 border rounded text-center ${
+                    selectedAmount === amount ? 'bg-blue-500 text-white' : 'bg-gray-100'
+                  }`}
+                >
+                  ${amount}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-bold mb-2">Payment Method:</label>
+            <select
+              value={selectedGateway}
+              onChange={handleGatewayChange}
+              className="w-full border p-2 rounded"
+            >
+              <option value="stripe">Card Payment</option>
+              <option value="paypal">PayPal</option>
+            </select>
+          </div>
+          {error && <p className="text-red-500">{error}</p>}
+          <button
+            type="submit"
+            className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
+          >
+            Proceed to Payment
+          </button>
+        </form>
+        {showPaymentForm && renderPaymentForm()}
+      </main>
+
+      <footer className="bg-blue-600 text-white py-4 mt-8">
+        <div className="container mx-auto text-center">
+          <p>Your contributions save lives. Thank you for your kindness!</p>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
+export default App;
