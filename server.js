@@ -16,19 +16,7 @@ import paypalRoutes from './routes/paypal.js';
 dotenv.config();
 
 const app = express();
-
-// Helmet CSP configuration
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://www.paypal.com", "https://js.stripe.com"],
-      connectSrc: ["'self'", "https://donation-wy5w.onrender.com", "https://localhost:5443"], // Allow your backend on Render and localhost
-      // Add any other necessary directives here
-    },
-  },
-}));
-
+app.use(helmet());
 app.use(cors({
   origin: 'http://localhost:5173', // Allow your frontend origin
   methods: 'GET,POST,PUT,DELETE,OPTIONS',
