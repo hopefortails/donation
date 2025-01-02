@@ -130,7 +130,7 @@ const App = () => {
     setLoading(true);
     try {
       const amount = selectedAmount || formData.amount;
-      const response = await fetch('http://localhost:5000/api/payments/create-payment-intent', {
+      const response = await fetch('https://localhost:5443/api/payments/create-payment-intent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount }),
@@ -317,3 +317,4 @@ const App = () => {
 };
 
 export default App;
+

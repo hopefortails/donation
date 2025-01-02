@@ -1,5 +1,5 @@
 
-const BASE_URL = 'https://donation-hopefortails-81380561.vercel.app/api/donations';
+const BASE_URL = '/api/donations';
 
 // Create a new donation
 export const createDonation = async (donationData) => {

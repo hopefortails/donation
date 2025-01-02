@@ -1,6 +1,5 @@
-// src/components/PaymentRequestButton.jsx
-import  { useEffect, useState } from "react";
-import PropTypes from "prop-types"; // Import PropTypes
+import { useEffect, useState } from "react";
+import PropTypes from "prop-types";
 import { loadStripe } from "@stripe/stripe-js";
 import { PaymentRequestButtonElement, Elements } from "@stripe/react-stripe-js";
 
@@ -14,7 +13,7 @@ const PaymentRequestButton = ({ clientSecret }) => {
     const createPaymentRequest = async () => {
       const stripe = await stripePromise;
 
-      // Create a payment request for Google Pay and Apple Pay
+      // Create a payment request for Google Pay, Apple Pay, and other payment methods
       const pr = stripe.paymentRequest({
         country: "US",
         currency: "usd",
@@ -22,8 +21,10 @@ const PaymentRequestButton = ({ clientSecret }) => {
           label: "Donation",
           amount: 50 * 100, // Amount in cents
         },
-        requestPayerName: true,
-        requestPayerEmail: true,
+        requestPayerName: true,   // Request the cardholder's name
+        requestPayerEmail: true,  // Request the payer's email
+        requestBillingAddress: true,  // Request billing address details
+        shippingOptions: [],     // Remove shipping options if not needed
       });
 
       // Check if the Payment Request can be shown
@@ -39,13 +40,10 @@ const PaymentRequestButton = ({ clientSecret }) => {
 
   // Handle the payment confirmation
   const handlePayment = async (paymentRequest) => {
-    // Remove unused `stripe` variable
-    // We don't need to redeclare `stripe` here, as it is already available in `stripePromise`
-    
     paymentRequest.on("paymentmethod", async (ev) => {
-      const { paymentMethod } = ev;
+      const { paymentMethod, billingDetails } = ev;
 
-      const response = await fetch("https://donation-hopefortails-81380561.vercel.app/api/payments/confirm-payment", {
+      const response = await fetch("/api/payments/confirm-payment", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -53,6 +51,7 @@ const PaymentRequestButton = ({ clientSecret }) => {
         body: JSON.stringify({
           paymentMethodId: paymentMethod.id,
           clientSecret,
+          billingDetails: billingDetails || {},
         }),
       });
 
