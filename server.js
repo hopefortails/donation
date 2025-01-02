@@ -4,7 +4,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import path from 'path';
+import https from 'https';
+import http from 'http';
+import fs from 'fs';
 
 // Import routes
 import donationRoutes from './routes/donations.js';
@@ -14,12 +16,21 @@ import paypalRoutes from './routes/paypal.js';
 dotenv.config();
 
 const app = express();
-const __dirname = path.resolve(); // Ensure compatibility with CommonJS and ESM
 
-// Middleware
-app.use(helmet());
+// Helmet CSP configuration
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://www.paypal.com", "https://js.stripe.com"],
+      connectSrc: ["'self'", "https://donation-wy5w.onrender.com", "https://localhost:5443"], // Allow your backend on Render and localhost
+      // Add any other necessary directives here
+    },
+  },
+}));
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173', // Frontend origin
+  origin: 'http://localhost:5173', // Allow your frontend origin
   methods: 'GET,POST,PUT,DELETE,OPTIONS',
   allowedHeaders: 'Content-Type,Authorization',
   credentials: true // Allow cookies and credentials
@@ -27,9 +38,18 @@ app.use(cors({
 app.use(morgan('dev'));
 app.use(express.json());
 
+// Global preflight request handler
+app.options('*', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(200); // Respond to OPTIONS preflight request
+});
+
 // MongoDB connection with retry logic
 const connectWithRetry = () => {
-  mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 5000 })
+  mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
     .then(() => console.log('MongoDB connected'))
     .catch((err) => {
       console.error('DB Connection Error:', err);
@@ -37,9 +57,6 @@ const connectWithRetry = () => {
     });
 };
 connectWithRetry();
-
-// Serve static files (frontend) from the `dist` folder
-app.use(express.static(path.join(__dirname, 'dist')));
 
 // Set up API routes
 app.use('/api/donations', donationRoutes);
@@ -51,10 +68,13 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'UP', uptime: process.uptime() });
 });
 
-// Catch-all route to serve the React app for unknown paths
-app.get('*', (req, res) => {
-  res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
-});
+// Redirect all HTTP traffic to HTTPS
+const redirectHttpToHttps = (req, res) => {
+  const httpsUrl = `https://${req.hostname}${req.url}`;
+  res.redirect(301, httpsUrl);
+};
+const httpApp = express();
+httpApp.use('*', redirectHttpToHttps);
 
 // Error handling middleware
 app.use((err, req, res) => {
@@ -62,8 +82,28 @@ app.use((err, req, res) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-// Start the server on the specified port
-const PORT = process.env.PORT || 5000; // Use Render's default or custom port
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+// Load SSL certificate and key files
+const privateKey = fs.readFileSync('server.key', 'utf8');
+const certificate = fs.readFileSync('server.crt', 'utf8');
+
+// Create HTTPS server
+const httpsServer = https.createServer({ key: privateKey, cert: certificate }, app);
+
+// Start HTTPS server
+const SSL_PORT = process.env.SSL_PORT || 5443;
+httpsServer.listen(SSL_PORT, () => {
+  console.log(`HTTPS Server running on https://localhost:${SSL_PORT}`);
+});
+
+// Start HTTP server to redirect traffic
+const HTTP_PORT = process.env.PORT || 5000;
+http.createServer(httpApp).listen(HTTP_PORT, () => {
+  console.log(`HTTP Server running on http://localhost:${HTTP_PORT} and redirecting to HTTPS`);
+});
+
+// Gracefully shut down the server
+process.on('SIGINT', async () => {
+  console.log('Closing MongoDB connection...');
+  await mongoose.disconnect();
+  process.exit(0);
 });
