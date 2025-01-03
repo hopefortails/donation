@@ -16,32 +16,52 @@ import paypalRoutes from './routes/paypal.js';
 dotenv.config();
 
 const app = express();
+const allowedOrigins = [
+  'http://localhost:5173', // Local development
+  'https://zesty-basbousa-557eb2.netlify.app', // Netlify deployment
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`Blocked by CORS: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: 'GET,POST,PUT,DELETE,OPTIONS',
+    credentials: true,
+  })
+);
 app.use(helmet());
-app.use(cors({
-  origin: 'http://localhost:5173', // Allow your frontend origin
-  methods: 'GET,POST,PUT,DELETE,OPTIONS',
-  allowedHeaders: 'Content-Type,Authorization',
-  credentials: true // Allow cookies and credentials
-}));
-app.use(morgan('dev'));
+app.use(morgan('combined')); // Better logging for production
 app.use(express.json());
 
-// Global preflight request handler
+// Global preflight request handlers
 app.options('*', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.sendStatus(200); // Respond to OPTIONS preflight request
+  const origin = req.headers.origin;
+  if (!origin || allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.sendStatus(200);
+  } else {
+    console.warn(`Blocked by CORS in preflight: ${origin}`);
+    res.status(403).send('CORS policy blocked this request');
+  }
 });
 
 // MongoDB connection with retry logic
 const connectWithRetry = () => {
-  mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  mongoose
+    .connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
     .then(() => console.log('MongoDB connected'))
     .catch((err) => {
       console.error('DB Connection Error:', err);
-      setTimeout(connectWithRetry, 5000); // Retry after 5 seconds
+      setTimeout(connectWithRetry, 5000);
     });
 };
 connectWithRetry();
@@ -56,40 +76,46 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'UP', uptime: process.uptime() });
 });
 
-// Redirect all HTTP traffic to HTTPS
+// Redirect HTTP to HTTPS
 const redirectHttpToHttps = (req, res) => {
-  const httpsUrl = `https://${req.hostname}${req.url}`;
+  const httpsUrl = `https://${req.headers.host}${req.url}`;
   res.redirect(301, httpsUrl);
 };
 const httpApp = express();
 httpApp.use('*', redirectHttpToHttps);
 
 // Error handling middleware
-app.use((err, req, res) => {
+app.use((err, req, res ) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
 // Load SSL certificate and key files
-const privateKey = fs.readFileSync('server.key', 'utf8');
-const certificate = fs.readFileSync('server.crt', 'utf8');
+let privateKey, certificate;
+try {
+  privateKey = fs.readFileSync('server.key', 'utf8');
+  certificate = fs.readFileSync('server.crt', 'utf8');
+// eslint-disable-next-line no-unused-vars
+} catch (error) {
+  console.error('SSL files missing. HTTPS may not work.');
+}
 
-// Create HTTPS server
-const httpsServer = https.createServer({ key: privateKey, cert: certificate }, app);
+// Create HTTPS servera
+if (privateKey && certificate) {
+  const httpsServer = https.createServer({ key: privateKey, cert: certificate }, app);
+  const SSL_PORT = process.env.SSL_PORT || 5443;
+  httpsServer.listen(SSL_PORT, () => {
+    console.log(`HTTPS Server running on https://localhost:${SSL_PORT}`);
+  });
+}
 
-// Start HTTPS server
-const SSL_PORT = process.env.SSL_PORT || 5443;
-httpsServer.listen(SSL_PORT, () => {
-  console.log(`HTTPS Server running on https://localhost:${SSL_PORT}`);
-});
-
-// Start HTTP server to redirect traffic
+// Start HTTP server for redirection
 const HTTP_PORT = process.env.PORT || 5000;
 http.createServer(httpApp).listen(HTTP_PORT, () => {
   console.log(`HTTP Server running on http://localhost:${HTTP_PORT} and redirecting to HTTPS`);
 });
 
-// Gracefully shut down the server
+// Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('Closing MongoDB connection...');
   await mongoose.disconnect();

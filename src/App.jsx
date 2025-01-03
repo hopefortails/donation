@@ -25,29 +25,47 @@ const PaymentForm = ({ selectedAmount, onPaymentSuccess }) => {
     e.preventDefault();
     setStatus('');
     setLoading(true);
-
+  
+    // Check if Stripe.js is ready
     if (!stripe || !elements) {
       setStatus('Stripe is not initialized. Please try again later.');
       setLoading(false);
       return;
     }
-
+  
+    // Check if clientSecret is properly set
+    if (!window.clientSecret) {
+      setStatus('Payment initialization failed. Please try again.');
+      setLoading(false);
+      return;
+    }
+  
     const card = elements.getElement(CardElement);
-    const { error, paymentIntent } = await stripe.confirmCardPayment(window.clientSecret, {
-      payment_method: {
-        card,
-      },
-    });
-
-    setLoading(false);
-    if (error) {
-      console.error('Payment failed:', error.message);
-      setStatus('Payment failed: ' + error.message);
-    } else if (paymentIntent.status === 'succeeded') {
-      setStatus('Payment successful! Thank you for your donation.');
-      onPaymentSuccess();
+  
+    try {
+      const { error, paymentIntent } = await stripe.confirmCardPayment(window.clientSecret, {
+        payment_method: {
+          card,
+        },
+      });
+  
+      if (error) {
+        console.error('Payment failed:', error.message);
+        setStatus('Payment failed: ' + error.message);
+      } else if (paymentIntent && paymentIntent.status === 'succeeded') {
+        setStatus('Payment successful! Thank you for your donation.');
+        onPaymentSuccess();
+      }
+    } catch (err) {
+      console.error('Unexpected error during payment:', err);
+      setStatus('An unexpected error occurred. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
+  console.log('Client Secret:', window.clientSecret);
+
+  
 
   return (
     <form onSubmit={handlePayment} className="bg-white p-4 rounded shadow-md">
